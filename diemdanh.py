@@ -1,79 +1,62 @@
-import cv2
+import cv2 
+import numpy as np
 import os
-import csv
-import datetime
 
-# ================== LOAD MODEL SAU KHI TRAIN ==================
-recognizer = cv2.face.LBPHFaceRecognizer_create()
-recognizer.read('trainer/trainer.yml')
+recognizer = cv2. face. LBPHFaceRecognizer_create()
+recognizer. read('trainer/trainer.yml')
+cascadePath = "haarcascade_frontalface_default.xml"
+faceCascade = cv2. CascadeClassifier(cascadePath);
 
-# Haarcascade để phát hiện khuôn mặt
-face_cascade = cv2.CascadeClassifier('haarcascade_frontalface_default.xml')
+font = cv2. FONT_HERSHEY_SIMPLEX
 
-# ================== CAMERA ==================
-cam = cv2.VideoCapture(0)
-cam.set(3, 640)
-cam.set(4, 480)
+id = 0
 
-font = cv2.FONT_HERSHEY_SIMPLEX
+names = ['none', '1', '2', '3', '4', '5']
+         
+cam = cv2. VideoCapture(0)
+cam. set(3, 640) 
+cam. set(4, 480)
 
-# ================== FILE CSV ĐIỂM DANH ==================
-attendance_file = "diemdanh.csv"
+minW = 0.1 * cam.get(3)
+minH = 0.1 * cam.get(4)
 
-# Tạo file CSV nếu chưa tồn tại
-if not os.path.exists(attendance_file):
-    with open(attendance_file, mode="w", newline="", encoding="utf-8") as f:
-        writer = csv.writer(f)
-        writer.writerow(["MSSV", "Thời điểm"])
-
-# Bộ nhớ lưu MSSV đã điểm danh để tránh trùng
-checked_ids = set()
-
-print("\n===== HỆ THỐNG ĐIỂM DANH BẰNG KHUÔN MẶT =====\n")
-
-# ================== VÒNG LẶP NHẬN DIỆN ==================
 while True:
-    ret, frame = cam.read()
-    gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+    
+    ret, img = cam.read()
+    img = cv2. flip(img, -1)
 
-    faces = face_cascade.detectMultiScale(gray, 1.3, 5)
+    gray = cv2. cvtColor (img, cv2. COLOR_BGR2GRAY)
+
+    faces = faceCascade.detectMultiScale(
+        gray, 
+        scaleFactor=1.2, 
+        minNeighbors=5, 
+        minSize=(int(minW), int(minH)),
+    )
 
     for (x, y, w, h) in faces:
 
-        # Vẽ khung khuôn mặt
-        cv2.rectangle(frame, (x, y), (x+w, y+h), (0, 255, 0), 2)
+        cv2. rectangle(img, (x, y), (x + w, y + h), (0, 255, 0), 2)
 
-        # Nhận diện ID
-        id_predict, confidence = recognizer.predict(gray[y:y+h, x:x+w])
+        id, confidence = recognizer.predict(gray[y:y + h, x:x + w])
 
-        # Confidence càng thấp càng tốt
-        if confidence < 70:
-            mssv = str(id_predict)
-            cv2.putText(frame, "MSSV: " + mssv, (x, y-10), font, 1, (0, 255, 0), 2)
-
-            # Ghi điểm danh nếu MSSV chưa được điểm danh
-            if mssv not in checked_ids:
-                now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-
-                with open(attendance_file, mode="a", newline="", encoding="utf-8") as f:
-                    writer = csv.writer(f)
-                    writer.writerow([mssv, now])
-
-                print(f"--> Đã điểm danh MSSV {mssv} lúc {now}")
-                checked_ids.add(mssv)
-
+        if (confidence < 100):
+            id = names[id]
+            confidence = " {0}%". format(round(100 - confidence))
         else:
-            cv2.putText(frame, "Unknown", (x, y-10), font, 1, (0, 0, 255), 2)
+            id = "unknown"
+            confidence = " {0}%". format(round(100 - confidence))
 
-    cv2.imshow("He thong diem danh", frame)
+        cv2. putText(img, str(id), (x + 5, y - 5), font, 1, (255, 255, 255), 2) 
+        cv2.putText(img,str(confidence), (x + 5, y + h - 5), font, 1, (255, 255, 0), 1)
 
-    # Nhấn ESC để thoát
-    k = cv2.waitKey(10)
+    cv2. imshow('nhan dien khuon mat', img)
+
+    k = cv2. waitKey(10) & 0xff # Press 'ESC' for exiting video
     if k == 27:
         break
 
-cam.release()
-cv2.destroyAllWindows()
-
-print("\n===== KẾT THÚC - FILE CSV ĐÃ ĐƯỢC LƯU =====")
-print("File: diemdanh.csv")
+    
+print(" \n [INFO] Thoat")
+cam. release ()
+cv2. destroyAllWindows ()
