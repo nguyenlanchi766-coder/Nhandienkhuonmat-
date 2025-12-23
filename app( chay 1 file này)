@@ -1,0 +1,241 @@
+import cv2
+import os
+import time
+import numpy as np
+import pandas as pd
+import gradio as gr
+from datetime import datetime
+import json
+
+thumucgoc = os.path.dirname(os.path.abspath(__file__))
+os.chdir(thumucgoc)
+
+
+# CAU HINH HE THONG
+thumucdulieu = "data"
+duongdanmodel = "trainer.yml"
+duongdannhan = "labels.json"
+videogoc = "raw_attendance.avi"
+videoketqua = "attendance_result.avi"
+fileexcel = "attendance.xlsx"
+
+os.makedirs(thumucdulieu, exist_ok=True)
+
+# KHOI TAO NHAN DIEN
+bophathienmat = cv2.CascadeClassifier(
+    cv2.data.haarcascades + "haarcascade_frontalface_default.xml"
+)
+bonhandien = cv2.face.LBPHFaceRecognizer_create()
+
+# BIEN TOAN CUC
+danhsachdadiemdanh = set()
+dangquayvideo = False
+camera = None
+ghivideo = None
+
+# 1. THU THAP KHUON MAT
+def thuthapkhuonmat(masv, tensv):
+    cam = cv2.VideoCapture(0)
+    soanh = 0
+    batdau = time.time()
+
+    tenthumuccu = f"{masv}_{tensv}"
+    duongdan = os.path.join(thumucdulieu, tenthumuccu)
+    os.makedirs(duongdan, exist_ok=True)
+
+    while time.time() - batdau < 5 and soanh < 30:
+        thanhcong, khunghinh = cam.read()
+        if not thanhcong:
+            continue
+
+        anhxam = cv2.cvtColor(khunghinh, cv2.COLOR_BGR2GRAY)
+        khuonmat = bophathienmat.detectMultiScale(anhxam, 1.3, 5)
+
+        for (x, y, w, h) in khuonmat:
+            soanh += 1
+            cv2.imwrite(
+                f"{duongdan}/{soanh}.jpg",
+                anhxam[y:y+h, x:x+w]
+            )
+
+    cam.release()
+    return f"Da luu {soanh} anh cho sinh vien {tensv}"
+
+# 2. TRAIN MODEL
+def trainmodel():
+    danhsachmat = []
+    nhan = []
+    bangnhan = {}
+    chiso = 0
+
+    for thumuc in os.listdir(thumucdulieu):
+        duongdan = os.path.join(thumucdulieu, thumuc)
+        if not os.path.isdir(duongdan):
+            continue
+
+        bangnhan[str(chiso)] = thumuc
+
+        for tenanh in os.listdir(duongdan):
+            anh = cv2.imread(os.path.join(duongdan, tenanh), 0)
+            danhsachmat.append(anh)
+            nhan.append(chiso)
+
+        chiso += 1
+
+    if not danhsachmat:
+        return "Chua co du lieu de train"
+
+    bonhandien.train(danhsachmat, np.array(nhan))
+    bonhandien.save(duongdanmodel)
+
+    with open(duongdannhan, "w", encoding="utf-8") as f:
+        json.dump(bangnhan, f, ensure_ascii=False)
+
+    return f"Train thanh cong {chiso} sinh vien"
+
+# 3. BAT DAU QUAY VIDEO
+def batdauquay():
+    global dangquayvideo, camera, ghivideo
+
+    dangquayvideo = True
+    camera = cv2.VideoCapture(0)
+
+    rong = int(camera.get(3))
+    cao = int(camera.get(4))
+
+    ghivideo = cv2.VideoWriter(
+        videogoc,
+        cv2.VideoWriter_fourcc(*"XVID"),
+        20,
+        (rong, cao)
+    )
+
+    while dangquayvideo:
+        thanhcong, khunghinh = camera.read()
+        if thanhcong:
+            ghivideo.write(khunghinh)
+
+    return "Dang quay video..."
+
+# 4. DUNG QUAY VIDEO
+def dungquay():
+    global dangquayvideo, camera, ghivideo
+
+    dangquayvideo = False
+
+    if camera is not None:
+        camera.release()
+
+    if ghivideo is not None:
+        ghivideo.release()
+
+    return "Da dung quay va luu video"
+# 5. XU LY VIDEO + DIEM DANH
+def xulyvideo():
+    global danhsachdadiemdanh
+    danhsachdadiemdanh = set()
+
+    with open(duongdannhan, "r", encoding="utf-8") as f:
+        bangnhan = json.load(f)
+
+    bonhandien.read(duongdanmodel)
+    cap = cv2.VideoCapture(videogoc)
+
+    rong = int(cap.get(3))
+    cao = int(cap.get(4))
+    fps = cap.get(cv2.CAP_PROP_FPS) or 20
+
+    out = cv2.VideoWriter(
+        videoketqua,
+        cv2.VideoWriter_fourcc(*"XVID"),
+        fps,
+        (rong, cao)
+    )
+
+    while True:
+        thanhcong, khunghinh = cap.read()
+        if not thanhcong:
+            break
+
+        anhxam = cv2.cvtColor(khunghinh, cv2.COLOR_BGR2GRAY)
+        khuonmat = bophathienmat.detectMultiScale(anhxam, 1.3, 5)
+
+        for (x, y, w, h) in khuonmat:
+            idsv, dotincay = bonhandien.predict(anhxam[y:y+h, x:x+w])
+
+            if dotincay < 70 and str(idsv) in bangnhan:
+                thongtin = bangnhan[str(idsv)]
+                masv, tensv = thongtin.split("_", 1)
+                nhanhienthi = f"{masv} - {tensv}"
+                mau = (0, 255, 0)
+
+                if masv not in danhsachdadiemdanh:
+                    danhsachdadiemdanh.add(masv)
+                    thoigian = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+                    dongmoi = pd.DataFrame(
+                        [[masv, tensv, thoigian]],
+                        columns=["Ma SV", "Ten SV", "Thoi gian"]
+                    )
+
+                    if os.path.exists(fileexcel):
+                        df = pd.read_excel(fileexcel)
+                        df = pd.concat([df, dongmoi])
+                    else:
+                        df = dongmoi
+
+                    df.to_excel(fileexcel, index=False)
+            else:
+                nhanhienthi = "Unknown"
+                mau = (0, 0, 255)
+
+            cv2.rectangle(khunghinh, (x, y), (x+w, y+h), mau, 2)
+            cv2.putText(
+                khunghinh,
+                nhanhienthi,
+                (x, y-10),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.8,
+                mau,
+                2
+            )
+
+        out.write(khunghinh)
+
+    cap.release()
+    out.release()
+
+    return videoketqua, fileexcel
+# 6. GIAO DIEN GRADIO
+with gr.Blocks() as giaodien:
+    gr.Markdown("# HE THONG DIEM DANH SINH VIEN (OpenCV + LBPH)")
+
+    with gr.Tab("Thu thap khuon mat"):
+        masv = gr.Textbox(label="Ma sinh vien")
+        tensv = gr.Textbox(label="Ten sinh vien")
+        ketqua1 = gr.Textbox()
+        gr.Button("Chup 30 anh").click(
+            thuthapkhuonmat,
+            [masv, tensv],
+            ketqua1
+        )
+
+    with gr.Tab("Train du lieu"):
+        ketqua2 = gr.Textbox()
+        gr.Button("Train model").click(trainmodel, None, ketqua2)
+
+    with gr.Tab("Quay video diem danh"):
+        thongbao = gr.Textbox()
+        gr.Button("Bat dau quay").click(batdauquay, None, thongbao)
+        gr.Button("Dung quay").click(dungquay, None, thongbao)
+
+    with gr.Tab("Xu ly va diem danh"):
+        video = gr.Video()
+        excel = gr.File(label="Tai file Excel")
+        gr.Button("Xu ly").click(
+            xulyvideo,
+            None,
+            [video, excel]
+        )
+
+giaodien.launch()
